@@ -185,7 +185,7 @@ source $TOP_DIR/stackrc
 
 # Warn users who aren't on an explicitly supported distro, but allow them to
 # override check and attempt installation with ``FORCE=yes ./stack``
-if [[ ! ${DISTRO} =~ (trusty|wily|xenial|7.0|wheezy|sid|testing|jessie|f22|f23|rhel7|kvmibm1) ]]; then
+if [[ ! ${DISTRO} =~ (trusty|wily|xenial|7.0|wheezy|sid|testing|jessie|f23|f24|rhel7|kvmibm1) ]]; then
     echo "WARNING: this script has not been tested on $DISTRO"
     if [[ "$FORCE" != "yes" ]]; then
         die $LINENO "If you wish to run this script anyway run with FORCE=yes"
@@ -334,6 +334,13 @@ fi
 # situation where they are on your image) you may choose to skip this
 # to speed things up
 SKIP_EPEL_INSTALL=$(trueorfalse False SKIP_EPEL_INSTALL)
+
+# If we have /etc/nodepool/provider assume we're on a OpenStack CI
+# node, where EPEL is already pointing at our internal mirror and RDO
+# is pre-installed.
+if [[ -f /etc/nodepool/provider ]]; then
+    SKIP_EPEL_INSTALL=True
+fi
 
 if is_fedora && [[ $DISTRO == "rhel7" ]] && \
         [[ ${SKIP_EPEL_INSTALL} != True ]]; then
@@ -563,6 +570,7 @@ source $TOP_DIR/lib/neutron-legacy
 source $TOP_DIR/lib/ldap
 source $TOP_DIR/lib/dstat
 source $TOP_DIR/lib/dlm
+source $TOP_DIR/lib/os_brick
 
 # Extras Source
 # --------------
@@ -789,6 +797,11 @@ if is_service_enabled heat horizon; then
     install_heatclient
 fi
 
+# Install shared libraries
+if is_service_enabled cinder nova; then
+    install_os_brick
+fi
+
 # Install middleware
 install_keystonemiddleware
 
@@ -830,7 +843,6 @@ fi
 if is_service_enabled neutron; then
     # Network service
     stack_install_service neutron
-    install_neutron_third_party
 fi
 
 if is_service_enabled nova; then
@@ -1080,15 +1092,6 @@ if is_service_enabled neutron; then
     fi
 fi
 
-# Some Neutron plugins require network controllers which are not
-# a part of the OpenStack project. Configure and start them.
-if is_service_enabled neutron; then
-    configure_neutron_third_party
-    init_neutron_third_party
-    start_neutron_third_party
-fi
-
-
 # Nova
 # ----
 
@@ -1222,11 +1225,9 @@ fi
 if is_service_enabled neutron-api; then
     echo_summary "Starting Neutron"
     start_neutron_api
-    # check_neutron_third_party_integration
 elif is_service_enabled q-svc; then
     echo_summary "Starting Neutron"
     start_neutron_service_and_check
-    check_neutron_third_party_integration
 elif is_service_enabled $DATABASE_BACKENDS && is_service_enabled n-net; then
     NM_CONF=${NOVA_CONF}
     if is_service_enabled n-cell; then
@@ -1250,7 +1251,6 @@ fi
 if is_service_enabled q-svc && [[ "$NEUTRON_CREATE_INITIAL_NETWORKS" == "True" ]]; then
     echo_summary "Creating initial neutron network elements"
     create_neutron_initial_network
-    setup_neutron_debug
 fi
 
 if is_service_enabled nova; then
@@ -1371,6 +1371,12 @@ if is_service_enabled cinder; then
         echo_summary "Skip setting lvm filters for non Ubuntu systems"
     fi
 fi
+
+# Run test-config
+# ---------------
+
+# Phase: test-config
+run_phase stack test-config
 
 
 # Fin

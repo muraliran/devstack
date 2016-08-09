@@ -108,9 +108,9 @@ EOF
             # source file paths, not relative paths. This screws with the matching
             # of '1:libvirt' making everything turn on. So use libvirt.c for now.
             # This will have to be re-visited when Ubuntu ships libvirt >= 1.2.3
-            local log_filters="1:libvirt.c 1:qemu 1:conf 1:security 3:object 3:event 3:json 3:file 1:util 1:qemu_monitor"
+            local log_filters="1:libvirt.c 1:qemu 1:conf 1:security 3:object 3:event 3:json 3:file 1:util 1:cpu"
         else
-            local log_filters="1:libvirt 1:qemu 1:conf 1:security 3:object 3:event 3:json 3:file 1:util 1:qemu_monitor"
+            local log_filters="1:libvirt 1:qemu 1:conf 1:security 3:object 3:event 3:json 3:file 1:util 1:cpu"
         fi
         local log_outputs="1:file:/var/log/libvirt/libvirtd.log"
         if ! sudo grep -q "^log_filters=\"$log_filters\"" /etc/libvirt/libvirtd.conf; then
@@ -121,18 +121,9 @@ EOF
         fi
     fi
 
-    # Update the libvirt cpu map with a gate64 cpu model. This enables nova
-    # live migration for 64bit guest OSes on heterogenous cloud "hardware".
-    if [[ -f /usr/share/libvirt/cpu_map.xml ]] ; then
-        sudo $TOP_DIR/tools/cpu_map_update.py /usr/share/libvirt/cpu_map.xml
-    fi
-
-    # libvirt detects various settings on startup, as we potentially changed
-    # the system configuration (modules, filesystems), we need to restart
-    # libvirt to detect those changes. Use a stop start as otherwise the new
-    # cpu_map is not loaded properly on some systems (Ubuntu).
-    stop_service $LIBVIRT_DAEMON
-    start_service $LIBVIRT_DAEMON
+    # Service needs to be started on redhat/fedora -- do a restart for
+    # sanity after fiddling the config.
+    restart_service $LIBVIRT_DAEMON
 }
 
 

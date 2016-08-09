@@ -101,7 +101,6 @@ AGENT_META_BINARY="$NEUTRON_BIN_DIR/neutron-metadata-agent"
 # loaded from per-plugin  scripts in lib/neutron_plugins/
 Q_DHCP_CONF_FILE=$NEUTRON_CONF_DIR/dhcp_agent.ini
 Q_L3_CONF_FILE=$NEUTRON_CONF_DIR/l3_agent.ini
-Q_FWAAS_CONF_FILE=$NEUTRON_CONF_DIR/fwaas_driver.ini
 Q_META_CONF_FILE=$NEUTRON_CONF_DIR/metadata_agent.ini
 
 # Default name for Neutron database
@@ -130,8 +129,6 @@ Q_USE_ROOTWRAP_DAEMON=$(trueorfalse True Q_USE_ROOTWRAP_DAEMON)
 Q_META_DATA_IP=${Q_META_DATA_IP:-$SERVICE_HOST}
 # Allow Overlapping IP among subnets
 Q_ALLOW_OVERLAPPING_IP=${Q_ALLOW_OVERLAPPING_IP:-True}
-# Use neutron-debug command
-Q_USE_DEBUG_COMMAND=${Q_USE_DEBUG_COMMAND:-False}
 # The name of the default q-l3 router
 Q_ROUTER_NAME=${Q_ROUTER_NAME:-router1}
 Q_NOTIFY_NOVA_PORT_STATUS_CHANGES=${Q_NOTIFY_NOVA_PORT_STATUS_CHANGES:-True}
@@ -181,9 +178,9 @@ fi
 # GRE tunnels are only supported by the openvswitch.
 ENABLE_TENANT_TUNNELS=${ENABLE_TENANT_TUNNELS:-True}
 
-# If using GRE tunnels for tenant networks, specify the range of
-# tunnel IDs from which tenant networks are allocated. Can be
-# overridden in ``localrc`` in necessary.
+# If using GRE, VXLAN or GENEVE tunnels for tenant networks,
+# specify the range of IDs from which tenant networks are
+# allocated. Can be overridden in ``localrc`` if necessary.
 TENANT_TUNNEL_RANGES=${TENANT_TUNNEL_RANGES:-1:1000}
 
 # To use VLANs for tenant networks, set to True in localrc. VLANs
@@ -267,13 +264,8 @@ source $TOP_DIR/lib/neutron_plugins/services/loadbalancer
 # Hardcoding for 1 service plugin for now
 source $TOP_DIR/lib/neutron_plugins/services/metering
 
-# Firewall Service Plugin functions
-# ---------------------------------
-source $TOP_DIR/lib/neutron_plugins/services/firewall
-
 # L3 Service functions
 source $TOP_DIR/lib/neutron_plugins/services/l3
-
 # Use security group or not
 if has_neutron_plugin_security_group; then
     Q_USE_SECGROUP=${Q_USE_SECGROUP:-True}
@@ -299,10 +291,7 @@ function _determine_config_server {
 }
 
 function _determine_config_l3 {
-    local opts="--config-file $NEUTRON_CONF --config-file=$Q_L3_CONF_FILE"
-    if is_service_enabled q-fwaas; then
-        opts+=" --config-file $Q_FWAAS_CONF_FILE"
-    fi
+    local opts="--config-file $NEUTRON_CONF --config-file $Q_L3_CONF_FILE"
     echo "$opts"
 }
 
@@ -334,10 +323,6 @@ function configure_mutnauq {
     if is_service_enabled q-metering; then
         _configure_neutron_metering
     fi
-    if is_service_enabled q-fwaas; then
-        deprecated "Configuring q-fwaas through devstack is deprecated"
-        _configure_neutron_fwaas
-    fi
     if is_service_enabled q-agt q-svc; then
         _configure_neutron_service
     fi
@@ -361,15 +346,13 @@ function configure_mutnauq {
         _configure_neutron_ceilometer_notifications
     fi
 
-    _configure_neutron_debug_command
-
     iniset $NEUTRON_CONF DEFAULT api_workers "$API_WORKERS"
 }
 
 function create_nova_conf_neutron {
     iniset $NOVA_CONF DEFAULT use_neutron True
     iniset $NOVA_CONF neutron auth_type "password"
-    iniset $NOVA_CONF neutron auth_url "$KEYSTONE_SERVICE_PROTOCOL://$KEYSTONE_SERVICE_HOST:$KEYSTONE_AUTH_PORT/v3"
+    iniset $NOVA_CONF neutron auth_url "$KEYSTONE_AUTH_URI/v3"
     iniset $NOVA_CONF neutron username "$Q_ADMIN_USERNAME"
     iniset $NOVA_CONF neutron password "$SERVICE_PASSWORD"
     iniset $NOVA_CONF neutron user_domain_name "$SERVICE_DOMAIN_NAME"
@@ -435,10 +418,6 @@ function install_mutnauq {
 
     git_clone $NEUTRON_REPO $NEUTRON_DIR $NEUTRON_BRANCH
     setup_develop $NEUTRON_DIR
-    if is_service_enabled q-fwaas; then
-        git_clone $NEUTRON_FWAAS_REPO $NEUTRON_FWAAS_DIR $NEUTRON_FWAAS_BRANCH
-        setup_develop $NEUTRON_FWAAS_DIR
-    fi
     if is_service_enabled q-lbaas; then
         git_clone $NEUTRON_LBAAS_REPO $NEUTRON_LBAAS_DIR $NEUTRON_LBAAS_BRANCH
         setup_develop $NEUTRON_LBAAS_DIR
@@ -528,7 +507,7 @@ function start_mutnauq_l2_agent {
 }
 
 function start_mutnauq_other_agents {
-    run_process q-dhcp "$AGENT_DHCP_BINARY --config-file $NEUTRON_CONF --config-file=$Q_DHCP_CONF_FILE"
+    run_process q-dhcp "$AGENT_DHCP_BINARY --config-file $NEUTRON_CONF --config-file $Q_DHCP_CONF_FILE"
 
     if is_service_enabled neutron-vpnaas; then
         :  # Started by plugin
@@ -536,8 +515,8 @@ function start_mutnauq_other_agents {
         run_process q-l3 "$AGENT_L3_BINARY $(determine_config_files neutron-l3-agent)"
     fi
 
-    run_process q-meta "$AGENT_META_BINARY --config-file $NEUTRON_CONF --config-file=$Q_META_CONF_FILE"
-    run_process q-lbaas "$AGENT_LBAAS_BINARY --config-file $NEUTRON_CONF --config-file=$LBAAS_AGENT_CONF_FILENAME"
+    run_process q-meta "$AGENT_META_BINARY --config-file $NEUTRON_CONF --config-file $Q_META_CONF_FILE"
+    run_process q-lbaas "$AGENT_LBAAS_BINARY --config-file $NEUTRON_CONF --config-file $LBAAS_AGENT_CONF_FILENAME"
     run_process q-metering "$AGENT_METERING_BINARY --config-file $NEUTRON_CONF --config-file $METERING_AGENT_CONF_FILENAME"
 
     if [ "$VIRT_DRIVER" = 'xenserver' ]; then
@@ -580,9 +559,6 @@ function stop_mutnauq_other {
     if is_service_enabled q-lbaas; then
         neutron_lbaas_stop
     fi
-    if is_service_enabled q-fwaas; then
-        neutron_fwaas_stop
-    fi
     if is_service_enabled q-metering; then
         neutron_metering_stop
     fi
@@ -614,7 +590,7 @@ function _move_neutron_addresses_route {
         # on configure we will also add $from_intf as a port on $to_intf,
         # assuming it is an OVS bridge.
 
-        local IP_ADD=""
+        local IP_REPLACE=""
         local IP_DEL=""
         local IP_UP=""
         local DEFAULT_ROUTE_GW
@@ -639,7 +615,7 @@ function _move_neutron_addresses_route {
 
         if [[ "$IP_BRD" != "" ]]; then
             IP_DEL="sudo ip addr del $IP_BRD dev $from_intf"
-            IP_ADD="sudo ip addr add $IP_BRD dev $to_intf"
+            IP_REPLACE="sudo ip addr replace $IP_BRD dev $to_intf"
             IP_UP="sudo ip link set $to_intf up"
             if [[ "$af" == "inet" ]]; then
                 IP=$(echo $IP_BRD | awk '{ print $1; exit }' | grep -o -E '(.*)/' | cut -d "/" -f1)
@@ -649,7 +625,7 @@ function _move_neutron_addresses_route {
 
         # The add/del OVS port calls have to happen either before or
         # after the address is moved in order to not leave it orphaned.
-        $DEL_OVS_PORT; $IP_DEL; $IP_ADD; $IP_UP; $ADD_OVS_PORT; $ADD_DEFAULT_ROUTE; $ARP_CMD
+        $DEL_OVS_PORT; $IP_DEL; $IP_REPLACE; $IP_UP; $ADD_OVS_PORT; $ADD_DEFAULT_ROUTE; $ARP_CMD
     fi
 }
 
@@ -798,29 +774,13 @@ function _configure_neutron_common {
     _neutron_setup_rootwrap
 }
 
-function _configure_neutron_debug_command {
-    if [[ "$Q_USE_DEBUG_COMMAND" != "True" ]]; then
-        return
-    fi
-
-    cp $NEUTRON_DIR/etc/l3_agent.ini.sample $NEUTRON_TEST_CONFIG_FILE
-
-    iniset $NEUTRON_TEST_CONFIG_FILE DEFAULT debug False
-    iniset $NEUTRON_TEST_CONFIG_FILE AGENT root_helper "$Q_RR_COMMAND"
-    if [[ "$Q_USE_ROOTWRAP_DAEMON" == "True" ]]; then
-        iniset $NEUTRON_TEST_CONFIG_FILE AGENT root_helper_daemon "$Q_RR_DAEMON_COMMAND"
-    fi
-
-    _neutron_setup_interface_driver $NEUTRON_TEST_CONFIG_FILE
-
-    neutron_plugin_configure_debug_command
-}
-
 function _configure_neutron_dhcp_agent {
 
     cp $NEUTRON_DIR/etc/dhcp_agent.ini.sample $Q_DHCP_CONF_FILE
 
     iniset $Q_DHCP_CONF_FILE DEFAULT debug $ENABLE_DEBUG_LOG_LEVEL
+    # make it so we have working DNS from guests
+    iniset $Q_DHCP_CONF_FILE DEFAULT dnsmasq_local_resolv True
     iniset $Q_DHCP_CONF_FILE AGENT root_helper "$Q_RR_COMMAND"
     if [[ "$Q_USE_ROOTWRAP_DAEMON" == "True" ]]; then
         iniset $Q_DHCP_CONF_FILE AGENT root_helper_daemon "$Q_RR_DAEMON_COMMAND"
@@ -839,7 +799,7 @@ function _configure_neutron_dhcp_agent {
 
     _neutron_setup_interface_driver $Q_DHCP_CONF_FILE
 
-    neutron_plugin_configure_dhcp_agent
+    neutron_plugin_configure_dhcp_agent $Q_DHCP_CONF_FILE
 }
 
 
@@ -873,14 +833,6 @@ function _configure_neutron_lbaas {
 function _configure_neutron_metering {
     neutron_agent_metering_configure_common
     neutron_agent_metering_configure_agent
-}
-
-function _configure_neutron_fwaas {
-    if [ -f $NEUTRON_FWAAS_DIR/etc/neutron_fwaas.conf ]; then
-        cp $NEUTRON_FWAAS_DIR/etc/neutron_fwaas.conf $NEUTRON_CONF_DIR
-    fi
-    neutron_fwaas_configure_common
-    neutron_fwaas_configure_driver
 }
 
 function _configure_dvr {
@@ -1026,24 +978,6 @@ function delete_probe {
     neutron-debug --os-tenant-name admin --os-username admin probe-delete $probe_id
 }
 
-function setup_neutron_debug {
-    if [[ "$Q_USE_DEBUG_COMMAND" == "True" ]]; then
-        public_net_id=`_get_net_id $PUBLIC_NETWORK_NAME`
-        if [[ -n $public_net_id ]]; then
-            neutron-debug --os-tenant-name admin --os-username admin --os-password $ADMIN_PASSWORD probe-create --device-owner compute $public_net_id
-        fi
-        private_net_id=`_get_net_id $PRIVATE_NETWORK_NAME`
-        if [[ -n $private_net_id ]]; then
-            neutron-debug --os-tenant-name admin --os-username admin --os-password $ADMIN_PASSWORD probe-create --device-owner compute $private_net_id
-        fi
-    fi
-}
-
-function teardown_neutron_debug {
-    delete_probe $PUBLIC_NETWORK_NAME
-    delete_probe $PRIVATE_NETWORK_NAME
-}
-
 function _get_net_id {
     neutron --os-cloud devstack-admin --os-region "$REGION_NAME" --os-tenant-name admin --os-username admin --os-password $ADMIN_PASSWORD net-list | grep $1 | awk '{print $2}'
 }
@@ -1066,55 +1000,6 @@ function _ssh_check_neutron {
     probe_cmd=`_get_probe_cmd_prefix $from_net`
     local testcmd="$probe_cmd ssh -o StrictHostKeyChecking=no -i $key_file ${user}@$ip echo success"
     test_with_retry "$testcmd" "server $ip didn't become ssh-able" $timeout_sec
-}
-
-# Neutron 3rd party programs
-#---------------------------
-
-# please refer to ``lib/neutron_thirdparty/README.md`` for details
-NEUTRON_THIRD_PARTIES=""
-for f in $TOP_DIR/lib/neutron_thirdparty/*; do
-    third_party=$(basename $f)
-    if is_service_enabled $third_party; then
-        source $TOP_DIR/lib/neutron_thirdparty/$third_party
-        NEUTRON_THIRD_PARTIES="$NEUTRON_THIRD_PARTIES,$third_party"
-    fi
-done
-
-function _neutron_third_party_do {
-    for third_party in ${NEUTRON_THIRD_PARTIES//,/ }; do
-        ${1}_${third_party}
-    done
-}
-
-# configure_neutron_third_party() - Set config files, create data dirs, etc
-function configure_neutron_third_party {
-    _neutron_third_party_do configure
-}
-
-# init_neutron_third_party() - Initialize databases, etc.
-function init_neutron_third_party {
-    _neutron_third_party_do init
-}
-
-# install_neutron_third_party() - Collect source and prepare
-function install_neutron_third_party {
-    _neutron_third_party_do install
-}
-
-# start_neutron_third_party() - Start running processes, including screen
-function start_neutron_third_party {
-    _neutron_third_party_do start
-}
-
-# stop_neutron_third_party - Stop running processes (non-screen)
-function stop_neutron_third_party {
-    _neutron_third_party_do stop
-}
-
-# check_neutron_third_party_integration() - Check that third party integration is sane
-function check_neutron_third_party_integration {
-    _neutron_third_party_do check
 }
 
 # Restore xtrace

@@ -36,10 +36,6 @@ The defined phases are:
 
 -  **local** - extracts ``localrc`` from ``local.conf`` before
    ``stackrc`` is sourced
--  **pre-install** - runs after the system packages are installed but
-   before any of the source repositories are installed
--  **install** - runs immediately after the repo installations are
-   complete
 -  **post-config** - runs after the layer 2 services are configured and
    before they are started
 -  **extra** - runs after services are started and before any files in
@@ -426,6 +422,9 @@ can be specified as a comma separated list.
    ::
 
       LIBS_FROM_GIT=python-keystoneclient,oslo.config
+
+Setting the variable to ``ALL`` will activate the download for all
+libraries.
 
 Virtual Environments
 --------------------

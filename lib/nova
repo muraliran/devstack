@@ -128,7 +128,7 @@ fi
 # --------------------------
 
 NETWORK_MANAGER=${NETWORK_MANAGER:-${NET_MAN:-FlatDHCPManager}}
-PUBLIC_INTERFACE=${PUBLIC_INTERFACE:-$PUBLIC_INTERFACE_DEFAULT}
+
 VLAN_INTERFACE=${VLAN_INTERFACE:-$GUEST_INTERFACE_DEFAULT}
 FLAT_NETWORK_BRIDGE=${FLAT_NETWORK_BRIDGE:-$FLAT_NETWORK_BRIDGE_DEFAULT}
 
@@ -481,8 +481,6 @@ function create_nova_conf {
         iniset $NOVA_CONF DEFAULT bindir "/usr/bin"
     fi
 
-    iniset $NOVA_CONF privsep_osbrick helper_command "sudo nova-rootwrap \$rootwrap_config privsep-helper --config-file $NOVA_CONF"
-
     if is_service_enabled n-api; then
         if is_service_enabled n-api-meta; then
             # If running n-api-meta as a separate service
@@ -589,14 +587,6 @@ function create_nova_conf {
 
     iniset $NOVA_CONF cinder os_region_name "$REGION_NAME"
 
-    if [[ "$NOVA_BACKEND" == "LVM" ]]; then
-        iniset $NOVA_CONF libvirt images_type "lvm"
-        iniset $NOVA_CONF libvirt images_volume_group $DEFAULT_VOLUME_GROUP_NAME
-        if isset LVM_VOLUME_CLEAR; then
-            iniset $NOVA_CONF libvirt volume_clear "$LVM_VOLUME_CLEAR"
-        fi
-    fi
-
     if is_ssl_enabled_service glance || is_service_enabled tls-proxy; then
         iniset $NOVA_CONF DEFAULT glance_protocol https
     fi
@@ -639,7 +629,7 @@ function init_nova_cells {
     if is_service_enabled n-cell; then
         cp $NOVA_CONF $NOVA_CELLS_CONF
         iniset $NOVA_CELLS_CONF database connection `database_connection_url $NOVA_CELLS_DB`
-        iniset $NOVA_CELLS_CONF oslo_messaging_rabbit rabbit_virtual_host child_cell
+        iniset_rpc_backend nova $NOVA_CELLS_CONF DEFAULT child_cell
         iniset $NOVA_CELLS_CONF DEFAULT dhcpbridge_flagfile $NOVA_CELLS_CONF
         iniset $NOVA_CELLS_CONF cells enable True
         iniset $NOVA_CELLS_CONF cells cell_type compute
@@ -669,8 +659,9 @@ function create_nova_cache_dir {
 }
 
 function create_nova_conf_nova_network {
+    local public_interface=${PUBLIC_INTERFACE:-$PUBLIC_INTERFACE_DEFAULT}
     iniset $NOVA_CONF DEFAULT network_manager "nova.network.manager.$NETWORK_MANAGER"
-    iniset $NOVA_CONF DEFAULT public_interface "$PUBLIC_INTERFACE"
+    iniset $NOVA_CONF DEFAULT public_interface "$public_interface"
     iniset $NOVA_CONF DEFAULT vlan_interface "$VLAN_INTERFACE"
     iniset $NOVA_CONF DEFAULT flat_network_bridge "$FLAT_NETWORK_BRIDGE"
     if [ -n "$FLAT_INTERFACE" ]; then

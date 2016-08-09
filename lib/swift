@@ -428,6 +428,7 @@ function configure_swift {
     sed -i "/^pipeline/ { s/proxy-server/${SWIFT_EXTRAS_MIDDLEWARE_LAST} proxy-server/ ; }" ${SWIFT_CONFIG_PROXY_SERVER}
 
     iniset ${SWIFT_CONFIG_PROXY_SERVER} app:proxy-server account_autocreate true
+    iniset ${SWIFT_CONFIG_PROXY_SERVER} app:proxy-server allow_account_management true
 
     # Configure Crossdomain
     iniset ${SWIFT_CONFIG_PROXY_SERVER} filter:crossdomain use "egg:swift#crossdomain"
@@ -457,9 +458,7 @@ function configure_swift {
         cat <<EOF >>${SWIFT_CONFIG_PROXY_SERVER}
 [filter:s3token]
 paste.filter_factory = keystonemiddleware.s3_token:filter_factory
-auth_port = ${KEYSTONE_AUTH_PORT}
-auth_host = ${KEYSTONE_AUTH_HOST}
-auth_protocol = ${KEYSTONE_AUTH_PROTOCOL}
+auth_uri = ${KEYSTONE_AUTH_URI}
 cafile = ${SSL_BUNDLE_FILE}
 admin_user = swift
 admin_tenant_name = ${SERVICE_PROJECT_NAME}

@@ -116,7 +116,7 @@ function undefine_virsh_secret {
 
 # check_os_support_ceph() - Check if the operating system provides a decent version of Ceph
 function check_os_support_ceph {
-    if [[ ! ${DISTRO} =~ (trusty|f22|f23) ]]; then
+    if [[ ! ${DISTRO} =~ (trusty|f23|f24) ]]; then
         echo "WARNING: your distro $DISTRO does not provide (at least) the Firefly release. Please use Ubuntu Trusty or Fedora 20 (and higher)"
         if [[ "$FORCE_CEPH_INSTALL" != "yes" ]]; then
             die $LINENO "If you wish to install Ceph on this distribution anyway run with FORCE_CEPH_INSTALL=yes"
@@ -301,7 +301,6 @@ function configure_ceph_nova {
     iniset $NOVA_CONF libvirt rbd_user ${CINDER_CEPH_USER}
     iniset $NOVA_CONF libvirt rbd_secret_uuid ${CINDER_CEPH_UUID}
     iniset $NOVA_CONF libvirt inject_key false
-    iniset $NOVA_CONF libvirt inject_partition -2
     iniset $NOVA_CONF libvirt disk_cachemodes "network=writeback"
     iniset $NOVA_CONF libvirt images_type rbd
     iniset $NOVA_CONF libvirt images_rbd_pool ${NOVA_CEPH_POOL}

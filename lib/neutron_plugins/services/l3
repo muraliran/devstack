@@ -15,6 +15,7 @@ IPV6_PROVIDER_FIXED_RANGE=${IPV6_PROVIDER_FIXED_RANGE:-}
 IPV6_PROVIDER_NETWORK_GATEWAY=${IPV6_PROVIDER_NETWORK_GATEWAY:-}
 
 PUBLIC_BRIDGE=${PUBLIC_BRIDGE:-br-ex}
+PUBLIC_BRIDGE_MTU=${PUBLIC_BRIDGE_MTU:-1500}
 
 # If Q_USE_PUBLIC_VETH=True, create and use a veth pair instead of
 # PUBLIC_BRIDGE.  This is intended to be used with
@@ -83,7 +84,7 @@ SUBNETPOOL_SIZE_V4=${SUBNETPOOL_SIZE_V4:-24}
 SUBNETPOOL_SIZE_V6=${SUBNETPOOL_SIZE_V6:-64}
 
 function _determine_config_l3 {
-    local opts="--config-file $NEUTRON_CONF --config-file=$Q_L3_CONF_FILE"
+    local opts="--config-file $NEUTRON_CONF --config-file $Q_L3_CONF_FILE"
     echo "$opts"
 }
 
@@ -91,7 +92,6 @@ function _configure_neutron_l3_agent {
 
     cp $NEUTRON_DIR/etc/l3_agent.ini.sample $Q_L3_CONF_FILE
 
-    iniset $Q_L3_CONF_FILE DEFAULT verbose True
     iniset $Q_L3_CONF_FILE DEFAULT debug $ENABLE_DEBUG_LOG_LEVEL
     iniset $Q_L3_CONF_FILE AGENT root_helper "$Q_RR_COMMAND"
     if [[ "$Q_USE_ROOTWRAP_DAEMON" == "True" ]]; then
@@ -100,12 +100,22 @@ function _configure_neutron_l3_agent {
 
     _neutron_setup_interface_driver $Q_L3_CONF_FILE
 
-    neutron_plugin_configure_l3_agent
+    neutron_plugin_configure_l3_agent $Q_L3_CONF_FILE
 
-    _move_neutron_addresses_route "$PUBLIC_INTERFACE" "$OVS_PHYSICAL_BRIDGE" True False "inet"
+    # If we've given a PUBLIC_INTERFACE to take over, then we assume
+    # that we can own the whole thing, and privot it into the OVS
+    # bridge. If we are not, we're probably on a single interface
+    # machine, and we just setup NAT so that fixed guests can get out.
+    if [[ -n "$PUBLIC_INTERFACE" ]]; then
+        _move_neutron_addresses_route "$PUBLIC_INTERFACE" "$OVS_PHYSICAL_BRIDGE" True False "inet"
 
-    if [[ $(ip -f inet6 a s dev "$PUBLIC_INTERFACE" | grep -c 'global') != 0 ]]; then
-        _move_neutron_addresses_route "$PUBLIC_INTERFACE" "$OVS_PHYSICAL_BRIDGE" False False "inet6"
+        if [[ $(ip -f inet6 a s dev "$PUBLIC_INTERFACE" | grep -c 'global') != 0 ]]; then
+            _move_neutron_addresses_route "$PUBLIC_INTERFACE" "$OVS_PHYSICAL_BRIDGE" False False "inet6"
+        fi
+    else
+        local default_dev=""
+        default_dev=$(ip route | grep ^default | awk '{print $5}')
+        sudo iptables -t nat -A POSTROUTING -o $default_dev -s $FLOATING_RANGE -j MASQUERADE
     fi
 }
 
@@ -150,7 +160,9 @@ function create_neutron_initial_network {
             die_if_not_set $LINENO SUBNET_ID "Failure creating SUBNET_ID for $PROVIDER_SUBNET_NAME $project_id"
         fi
 
-        if [[ "$IP_VERSION" =~ .*6 ]] && [[ -n "$IPV6_PROVIDER_FIXED_RANGE" ]] && [[ -n "$IPV6_PROVIDER_NETWORK_GATEWAY" ]]; then
+        if [[ "$IP_VERSION" =~ .*6 ]]; then
+            die_if_not_set $LINENO IPV6_PROVIDER_FIXED_RANGE "IPV6_PROVIDER_FIXED_RANGE has not been set, but Q_USE_PROVIDERNET_FOR_PUBLIC is true and IP_VERSION includes 6"
+            die_if_not_set $LINENO IPV6_PROVIDER_NETWORK_GATEWAY "IPV6_PROVIDER_NETWORK_GATEWAY has not been set, but Q_USE_PROVIDERNET_FOR_PUBLIC is true and IP_VERSION includes 6"
             SUBNET_V6_ID=$(neutron --os-cloud devstack-admin --os-region "$REGION_NAME" subnet-create --tenant_id $project_id --ip_version 6 --ipv6-address-mode $IPV6_ADDRESS_MODE --gateway $IPV6_PROVIDER_NETWORK_GATEWAY --name $IPV6_PROVIDER_SUBNET_NAME $NET_ID $IPV6_PROVIDER_FIXED_RANGE | grep 'id' | get_field 2)
             die_if_not_set $LINENO SUBNET_V6_ID "Failure creating SUBNET_V6_ID for $IPV6_PROVIDER_SUBNET_NAME $project_id"
         fi
@@ -175,9 +187,7 @@ function create_neutron_initial_network {
         fi
     fi
 
-    AUTO_ALLOCATE_EXT=$(neutron --os-cloud devstack-admin --os-region "$REGION_NAME" ext-list | grep 'auto-allocated-topology' | get_field 1)
-    SUBNETPOOL_EXT=$(neutron --os-cloud devstack-admin --os-region "$REGION_NAME" ext-list | grep 'subnet_allocation' | get_field 1)
-    if is_service_enabled q-l3; then
+    if is_networking_extension_supported "router" && is_networking_extension_supported "external-net"; then
         # Create a router, and add the private subnet as one of its interfaces
         if [[ "$Q_L3_ROUTER_PER_TENANT" == "True" ]]; then
             # create a tenant-owned router.
@@ -189,10 +199,8 @@ function create_neutron_initial_network {
             die_if_not_set $LINENO ROUTER_ID "Failure creating ROUTER_ID for $Q_ROUTER_NAME"
         fi
 
-        # if the extension is available, then mark the external
-        # network as default, and provision default subnetpools
         EXTERNAL_NETWORK_FLAGS="--router:external"
-        if [[ -n $AUTO_ALLOCATE_EXT && -n $SUBNETPOOL_EXT ]]; then
+        if is_networking_extension_supported "auto-allocated-topology" && is_networking_extension_supported "subnet_allocation"; then
             EXTERNAL_NETWORK_FLAGS="$EXTERNAL_NETWORK_FLAGS --is-default"
             if [[ "$IP_VERSION" =~ 4.* ]]; then
                 SUBNETPOOL_V4_ID=$(neutron --os-cloud devstack-admin --os-region "$REGION_NAME" subnetpool-create $SUBNETPOOL_NAME --default-prefixlen $SUBNETPOOL_SIZE_V4 --pool-prefix $SUBNETPOOL_PREFIX_V4 --shared --is-default=True | grep ' id ' | get_field 2)
@@ -292,7 +300,7 @@ function _neutron_configure_router_v4 {
     neutron --os-cloud devstack-admin --os-region "$REGION_NAME" router-gateway-set $ROUTER_ID $EXT_NET_ID
 
     # This logic is specific to using the l3-agent for layer 3
-    if is_service_enabled q-l3; then
+    if is_service_enabled q-l3 || is_service_enabled neutron-l3;  then
         # Configure and enable public bridge
         local ext_gw_interface="none"
         if is_neutron_ovs_base_plugin; then
@@ -337,7 +345,7 @@ function _neutron_configure_router_v6 {
     fi
 
     # This logic is specific to using the l3-agent for layer 3
-    if is_service_enabled q-l3; then
+    if is_service_enabled q-l3 || is_service_enabled neutron-l3; then
         # Ensure IPv6 forwarding is enabled on the host
         sudo sysctl -w net.ipv6.conf.all.forwarding=1
         # Configure and enable public bridge
@@ -351,7 +359,7 @@ function _neutron_configure_router_v6 {
             local ipv6_cidr_len=${IPV6_PUBLIC_RANGE#*/}
 
             # Configure interface for public bridge
-            sudo ip -6 addr add $ipv6_ext_gw_ip/$ipv6_cidr_len dev $ext_gw_interface
+            sudo ip -6 addr replace $ipv6_ext_gw_ip/$ipv6_cidr_len dev $ext_gw_interface
             sudo ip -6 route replace $FIXED_RANGE_V6 via $IPV6_ROUTER_GW_IP dev $ext_gw_interface
         fi
         _neutron_set_router_id
@@ -363,4 +371,11 @@ function is_provider_network {
         return 0
     fi
     return 1
+}
+
+function is_networking_extension_supported {
+    local extension=$1
+    # TODO(sc68cal) cache this instead of calling every time
+    EXT_LIST=$(neutron --os-cloud devstack-admin --os-region "$REGION_NAME" ext-list -c alias -f value)
+    [[ $EXT_LIST =~ $extension ]] && return 0
 }

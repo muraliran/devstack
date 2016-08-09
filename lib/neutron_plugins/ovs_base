@@ -19,7 +19,7 @@ function is_neutron_ovs_base_plugin {
 
 function _neutron_ovs_base_add_bridge {
     local bridge=$1
-    local addbr_cmd="sudo ovs-vsctl --no-wait -- --may-exist add-br $bridge"
+    local addbr_cmd="sudo ovs-vsctl -- --may-exist add-br $bridge"
 
     if [ "$OVS_DATAPATH_TYPE" != "system" ] ; then
         addbr_cmd="$addbr_cmd -- set Bridge $bridge datapath_type=${OVS_DATAPATH_TYPE}"
@@ -54,7 +54,7 @@ function _neutron_ovs_base_install_ubuntu_dkms {
     local kernel_major_minor
     kernel_major_minor=`echo $kernel_version | cut -d. -f1-2`
     # From kernel 3.13 on, openvswitch-datapath-dkms is not needed
-    if [ `vercmp_numbers "$kernel_major_minor" "3.13"` -lt "0" ]; then
+    if vercmp "$kernel_major_minor" "<" "3.13" ; then
         install_package "dkms openvswitch-datapath-dkms linux-headers-$kernel_version"
     fi
 }
@@ -105,9 +105,14 @@ function _neutron_ovs_base_configure_l3_agent {
         sudo ip link set $Q_PUBLIC_VETH_EX up
         sudo ip addr flush dev $Q_PUBLIC_VETH_EX
     else
-        _neutron_ovs_base_add_bridge $PUBLIC_BRIDGE
+        _neutron_ovs_base_add_public_bridge
         sudo ovs-vsctl br-set-external-id $PUBLIC_BRIDGE bridge-id $PUBLIC_BRIDGE
     fi
+}
+
+function _neutron_ovs_base_add_public_bridge {
+    _neutron_ovs_base_add_bridge $PUBLIC_BRIDGE
+    set_mtu $PUBLIC_BRIDGE $PUBLIC_BRIDGE_MTU
 }
 
 function _neutron_ovs_base_configure_nova_vif_driver {

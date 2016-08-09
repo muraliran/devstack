@@ -70,11 +70,13 @@ if ! isset ENABLED_SERVICES ; then
     # Keystone - nothing works without keystone
     ENABLED_SERVICES=key
     # Nova - services to support libvirt based openstack clouds
-    ENABLED_SERVICES+=,n-api,n-cpu,n-net,n-cond,n-sch,n-novnc,n-cauth
+    ENABLED_SERVICES+=,n-api,n-cpu,n-cond,n-sch,n-novnc,n-cauth
     # Glance services needed for Nova
     ENABLED_SERVICES+=,g-api,g-reg
     # Cinder
     ENABLED_SERVICES+=,c-sch,c-api,c-vol
+    # Neutron
+    ENABLED_SERVICES+=,q-svc,q-dhcp,q-meta,q-agt,q-l3
     # Dashboard
     ENABLED_SERVICES+=,horizon
     # Additional services
@@ -135,12 +137,29 @@ elif [[ -f $RC_DIR/.localrc.auto ]]; then
     source $RC_DIR/.localrc.auto
 fi
 
+# Default for log coloring is based on interactive-or-not.
+# Baseline assumption is that non-interactive invocations are for CI,
+# where logs are to be presented as browsable text files; hence color
+# codes should be omitted.
+# Simply override LOG_COLOR if your environment is different.
+if [ -t 1 ]; then
+    _LOG_COLOR_DEFAULT=True
+else
+    _LOG_COLOR_DEFAULT=False
+fi
+
 # Use color for logging output (only available if syslog is not used)
-LOG_COLOR=$(trueorfalse True LOG_COLOR)
+LOG_COLOR=$(trueorfalse $_LOG_COLOR_DEFAULT LOG_COLOR)
 
 # Make tracing more educational
 if [[ "$LOG_COLOR" == "True" ]]; then
-    export PS4='+\[$(tput setaf 242)\]$(short_source)\[$(tput sgr0)\] '
+    # tput requires TERM or -T.  If neither is present, use vt100, a
+    # no-frills least common denominator supported everywhere.
+    TPUT_T=
+    if ! [ $TERM ]; then
+        TPUT_T='-T vt100'
+    fi
+    export PS4='+\[$(tput '$TPUT_T' setaf 242)\]$(short_source)\[$(tput '$TPUT_T' sgr0)\] '
 else
     export PS4='+ $(short_source):   '
 fi
@@ -208,6 +227,9 @@ REQUIREMENTS_DIR=$DEST/requirements
 # ex: LIBS_FROM_GIT=python-keystoneclient,oslo.config
 #
 # Will install those 2 libraries from git, the rest from pypi.
+#
+# Setting the variable to 'ALL' will activate the download for all
+# libraries.
 
 
 ##############
@@ -281,6 +303,10 @@ TEMPEST_BRANCH=${TEMPEST_BRANCH:-master}
 # volume client
 GITREPO["python-cinderclient"]=${CINDERCLIENT_REPO:-${GIT_BASE}/openstack/python-cinderclient.git}
 GITBRANCH["python-cinderclient"]=${CINDERCLIENT_BRANCH:-master}
+
+# os-brick client for local volume attachement
+GITREPO["python-brick-cinderclient-ext"]=${BRICK_CINDERCLIENT_REPO:-${GIT_BASE}/openstack/python-brick-cinderclient-ext.git}
+GITBRANCH["python-brick-cinderclient-ext"]=${BRICK_CINDERCLIENT_BRANCH:-master}
 
 # python glance client library
 GITREPO["python-glanceclient"]=${GLANCECLIENT_REPO:-${GIT_BASE}/openstack/python-glanceclient.git}
@@ -685,6 +711,8 @@ S3_SERVICE_PORT=${S3_SERVICE_PORT:-3333}
 # Common network names
 PRIVATE_NETWORK_NAME=${PRIVATE_NETWORK_NAME:-"private"}
 PUBLIC_NETWORK_NAME=${PUBLIC_NETWORK_NAME:-"public"}
+
+PUBLIC_INTERFACE=${PUBLIC_INTERFACE:-""}
 
 # Set default screen name
 SCREEN_NAME=${SCREEN_NAME:-stack}
